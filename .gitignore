@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+
+# secrets / local state -- never commit these
+storage_state.json
+credentials.json
+token.json
+calendar_id.txt
+raw_timetable.json
+
+sync.log
+launchd.log
+storage_state.bak
+login-fail-*.png

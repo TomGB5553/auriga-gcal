@@ -23,6 +23,7 @@ from playwright.sync_api import sync_playwright
 
 import config
 from auth import PLANNING_PAGE, authenticated_page
+from notify import notify
 
 
 def monday_of(d: dt.date) -> dt.date:
@@ -100,4 +101,15 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--login", action="store_true", help="log in by hand in a real browser")
     args = ap.parse_args()
-    do_login() if args.login else fetch()
+    if args.login:
+        do_login()
+    else:
+        try:
+            fetch()
+        except SystemExit as e:
+            if e.code not in (0, None):
+                notify("Auriga → Calendar: fetch failed", str(e.code))
+            raise
+        except BaseException as e:
+            notify("Auriga → Calendar: fetch failed", f"{type(e).__name__}: {e}")
+            raise

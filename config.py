@@ -10,8 +10,8 @@ PLANNING_API = AURIGA_BASE + "/api/plannings/me"
 # and as the landing page for the manual login.
 LOGIN_LANDING = AURIGA_BASE + "/"
 
-# How many weeks ahead to sync (this week + the next N-1).
-WEEKS_AHEAD = 4
+# How many weeks ahead to sync (this week + the next N-1). 13 weeks ~= 90 days.
+WEEKS_AHEAD = 13
 
 # --- files (all git-ignored) ---
 STORAGE_STATE = HERE / "storage_state.json"   # saved browser session for Auriga

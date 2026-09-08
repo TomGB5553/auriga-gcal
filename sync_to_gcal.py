@@ -22,6 +22,7 @@ from googleapiclient.errors import HttpError
 
 import config
 from events import load_events
+from notify import notify
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -80,22 +81,50 @@ def get_calendar_id(svc) -> str:
     return created["id"]
 
 
-def existing_future_ids(svc, cid: str) -> set[str]:
-    now = dt.datetime.now(dt.timezone.utc).isoformat()
-    ids: set[str] = set()
+def existing_future_events(svc, cid: str) -> dict[str, dict]:
+    # start a week back so classes earlier today / earlier this week (which the
+    # fetch still returns) are matched instead of re-inserted every run
+    since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=8)).isoformat()
+    out: dict[str, dict] = {}
     page_token = None
     while True:
         resp = svc.events().list(
-            calendarId=cid, timeMin=now, singleEvents=True,
+            calendarId=cid, timeMin=since, singleEvents=True,
             privateExtendedProperty="auriga=1", maxResults=2500,
             pageToken=page_token,
+            fields="items(id,summary,location,description,colorId,start,end),nextPageToken",
         ).execute()
         for ev in resp.get("items", []):
-            ids.add(ev["id"])
+            out[ev["id"]] = ev
         page_token = resp.get("nextPageToken")
         if not page_token:
             break
-    return ids
+    return out
+
+
+def _instant(slot: dict):
+    s = slot.get("dateTime")
+    return dt.datetime.fromisoformat(s.replace("Z", "+00:00")) if s else slot.get("date")
+
+
+def _differs(current: dict, body: dict) -> bool:
+    """True if the calendar event needs updating to match the freshly built body."""
+    if (current.get("summary") or "") != (body.get("summary") or ""):
+        return True
+    if (current.get("location") or "") != (body.get("location") or ""):
+        return True
+    if (current.get("description") or "") != (body.get("description") or ""):
+        return True
+    if (current.get("colorId") or "") != (body.get("colorId") or ""):
+        return True
+    try:
+        if _instant(current["start"]) != _instant(body["start"]):
+            return True
+        if _instant(current["end"]) != _instant(body["end"]):
+            return True
+    except (KeyError, ValueError):
+        return True
+    return False
 
 
 def _run(request):
@@ -115,41 +144,72 @@ def _run(request):
             delay = min(delay * 2, 32)
 
 
-def main() -> None:
+def sync() -> tuple[int, int, int]:
     events = load_events()
     if not events:
-        sys.exit("No events parsed from raw_timetable.json -- run fetch_timetable.py first.")
+        raise SystemExit("No events parsed from raw_timetable.json -- run fetch_timetable.py first.")
 
     svc = get_service()
     cid = get_calendar_id(svc)
 
-    stale = existing_future_ids(svc, cid)
-    upserted = 0
+    current = existing_future_events(svc, cid)
+    added = changed = removed = 0
+
     for ev in events:
         body = ev.to_gcal_body()
-        exists = body["id"] in stale
-        stale.discard(body["id"])
-        if exists:
-            _run(svc.events().update(calendarId=cid, eventId=body["id"], body=body))
-        else:
+        cur = current.pop(body["id"], None)
+        if cur is None:
             try:
                 _run(svc.events().insert(calendarId=cid, body=body))
             except HttpError as e:
-                if e.resp.status == 409:  # already there -> update instead
+                if e.resp.status == 409:  # race: already there
                     _run(svc.events().update(calendarId=cid, eventId=body["id"], body=body))
                 else:
                     raise
-        upserted += 1
-        time.sleep(0.25)  # stay under Google's per-calendar write burst
+            added += 1
+            time.sleep(0.25)
+        elif _differs(cur, body):
+            _run(svc.events().update(calendarId=cid, eventId=body["id"], body=body))
+            changed += 1
+            time.sleep(0.25)
+        # unchanged -> no API call
 
-    for gid in stale:
+    # left in `current` = on the calendar but not in the fetched window.
+    # Only remove ones still in the future -- past classes just fell out of the
+    # fetch range and aren't real cancellations.
+    now = dt.datetime.now(dt.timezone.utc)
+    for gid, cur in current.items():
+        try:
+            if _instant(cur["start"]) < now:
+                continue
+        except (KeyError, ValueError, TypeError):
+            pass
         try:
             _run(svc.events().delete(calendarId=cid, eventId=gid))
         except HttpError as e:
             if e.resp.status not in (404, 410):
                 raise
+        removed += 1
 
-    print(f"{upserted} events synced, {len(stale)} stale removed -> '{config.CALENDAR_NAME}'.")
+    print(f"CHANGES added={added} changed={changed} removed={removed}")
+    print(f"{added + changed} written, {removed} removed, {len(events)} events "
+          f"-> '{config.CALENDAR_NAME}'.")
+    return added, changed, removed
+
+
+def main() -> None:
+    try:
+        added, changed, removed = sync()
+    except SystemExit as e:
+        if e.code not in (0, None):
+            notify("Auriga → Calendar: sync failed", str(e.code))
+        raise
+    except BaseException as e:
+        notify("Auriga → Calendar: sync failed", f"{type(e).__name__}: {e}")
+        raise
+    if added or changed or removed:
+        notify("Timetable updated",
+               f"added {added} · changed {changed} · removed {removed}")
 
 
 if __name__ == "__main__":

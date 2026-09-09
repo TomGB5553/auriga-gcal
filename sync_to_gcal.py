@@ -197,6 +197,21 @@ def sync() -> tuple[int, int, int]:
     return added, changed, removed
 
 
+_OFFLINE_HINTS = (
+    "ServerNotFoundError", "TransportError", "ERR_NAME_NOT_RESOLVED",
+    "Name or service not known", "Temporary failure in name resolution",
+    "Network is unreachable", "Connection reset", "Connection aborted",
+    "timed out", "getaddrinfo",
+)
+
+
+def _looks_offline(exc: BaseException) -> bool:
+    if isinstance(exc, (ConnectionError, TimeoutError)):
+        return True
+    text = f"{type(exc).__name__}: {exc}"
+    return any(h in text for h in _OFFLINE_HINTS)
+
+
 def main() -> None:
     try:
         added, changed, removed = sync()
@@ -205,6 +220,9 @@ def main() -> None:
             notify("Auriga → Calendar: sync failed", str(e.code))
         raise
     except BaseException as e:
+        if _looks_offline(e):
+            print(f"network error, skipping this run: {e}")
+            sys.exit(0)
         notify("Auriga → Calendar: sync failed", f"{type(e).__name__}: {e}")
         raise
     if added or changed or removed:

@@ -22,7 +22,7 @@ import sys
 from playwright.sync_api import sync_playwright
 
 import config
-from auth import PLANNING_PAGE, authenticated_page
+from auth import PLANNING_PAGE, OfflineError, _is_offline, authenticated_page
 from notify import notify
 
 
@@ -81,17 +81,24 @@ def _grab_api_token(page) -> str:
 
 def fetch() -> None:
     combined = []
-    with authenticated_page(headless=True) as page:
-        token = _grab_api_token(page)
-        req = page.context.request
-        for start, end in week_ranges(config.WEEKS_AHEAD):
-            resp = req.get(api_url(start, end), headers={"Authorization": token})
-            if not resp.ok:
-                sys.exit(f"API error {resp.status} for {start}..{end}: {resp.text()[:300]}")
-            data = resp.json()
-            n = len(data) if isinstance(data, list) else "?"
-            print(f"  {start} .. {end}: {n} items")
-            combined.append({"startDate": str(start), "endDate": str(end), "data": data})
+    try:
+        with authenticated_page(headless=True) as page:
+            token = _grab_api_token(page)
+            req = page.context.request
+            for start, end in week_ranges(config.WEEKS_AHEAD):
+                resp = req.get(api_url(start, end), headers={"Authorization": token})
+                if not resp.ok:
+                    sys.exit(f"API error {resp.status} for {start}..{end}: {resp.text()[:300]}")
+                data = resp.json()
+                n = len(data) if isinstance(data, list) else "?"
+                print(f"  {start} .. {end}: {n} items")
+                combined.append({"startDate": str(start), "endDate": str(end), "data": data})
+    except (SystemExit, OfflineError):
+        raise
+    except Exception as e:
+        if _is_offline(e):
+            raise OfflineError(str(e)) from e
+        raise
 
     config.RAW_DUMP.write_text(json.dumps(combined, indent=2, ensure_ascii=False))
     print(f"\nWrote {config.RAW_DUMP.name} ({len(combined)} weeks).")
@@ -106,6 +113,10 @@ if __name__ == "__main__":
     else:
         try:
             fetch()
+        except OfflineError as e:
+            # no connectivity -- not actionable, next scheduled run will catch up
+            print(f"offline, skipping this run: {e}")
+            sys.exit(0)
         except SystemExit as e:
             if e.code not in (0, None):
                 notify("Auriga → Calendar: fetch failed", str(e.code))

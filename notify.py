@@ -16,11 +16,12 @@ def notify(title: str, message: str, *, only_headless: bool = True) -> None:
         return
     if not shutil.which("osascript"):
         return
-    clean = lambda s: s.replace("\\", "").replace('"', "'").strip()[:230]
+    def clean(s: str, maxlen: int) -> str:
+        return s.replace("\\", "").replace('"', "'").strip()[:maxlen]
     try:
         subprocess.run(
             ["osascript", "-e",
-             f'display notification "{clean(message)}" with title "{clean(title)}"'],
+             f'display notification "{clean(message, 500)}" with title "{clean(title, 80)}"'],
             check=False, timeout=10,
         )
     except Exception:

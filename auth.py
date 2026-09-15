@@ -140,7 +140,25 @@ def open_authenticated(headless: bool = True):
     """Returns (playwright, browser, page). Caller must call browser.close()
     and playwright.stop() -- or use the `authenticated_page` context manager."""
     pw = sync_playwright().start()
-    browser = pw.chromium.launch(headless=headless)
+    browser = None
+    launch_err: BaseException | None = None
+    for attempt in range(3):
+        try:
+            browser = pw.chromium.launch(headless=headless)
+            launch_err = None
+            break
+        except PWTimeout as e:
+            # right after waking from sleep, Chromium can be slow to spawn
+            launch_err = e
+            if attempt < 2:
+                time.sleep(20)
+    if launch_err is not None:
+        pw.stop()
+        # Unlike a network drop, a browser that still won't start after 3 tries
+        # is worth surfacing (disk full, corrupted install, ...) rather than
+        # silently skipping -- so this is NOT an OfflineError.
+        raise RuntimeError(f"Chromium failed to launch after 3 attempts: {launch_err}")
+
     ctx_kwargs = {}
     if config.STORAGE_STATE.exists():
         ctx_kwargs["storage_state"] = str(config.STORAGE_STATE)

@@ -16,6 +16,16 @@ WEEKS_AHEAD = 13
 # --- files (all git-ignored) ---
 STORAGE_STATE = HERE / "storage_state.json"   # saved browser session for Auriga
 RAW_DUMP = HERE / "raw_timetable.json"        # last raw API response, for debugging
+LAST_SUCCESS_FILE = HERE / "last_success.txt"  # timestamp of the last full sync
+
+# launchd fires this job at several checkpoints through the day (see
+# com.tom.auriga-gcal.plist); each checkpoint skips straight away if a sync
+# already succeeded more recently than this, so it settles into ~2 real
+# refreshes/day without needing to know your class schedule.
+REFRESH_STALE_AFTER_HOURS = 10
+
+# How far ahead to list individual changes in the "Timetable updated" notification.
+NOTICE_WINDOW_DAYS = 14
 
 # --- Google ---
 GOOGLE_CREDENTIALS = HERE / "credentials.json"  # OAuth client, downloaded from Google

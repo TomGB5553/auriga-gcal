@@ -13,3 +13,4 @@ sync.log
 launchd.log
 storage_state.bak
 login-fail-*.png
+last_success.txt

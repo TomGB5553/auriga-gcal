@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as dt
 import sys
 import time
+from zoneinfo import ZoneInfo
 
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
@@ -21,8 +22,11 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 import config
+import staleness
 from events import load_events
 from notify import notify
+
+_LOCAL_TZ = ZoneInfo(config.TIMEZONE)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
@@ -144,7 +148,11 @@ def _run(request):
             delay = min(delay * 2, 32)
 
 
-def sync() -> tuple[int, int, int]:
+def _fmt_when(instant: dt.datetime) -> str:
+    return instant.astimezone(_LOCAL_TZ).strftime("%a %d %b")
+
+
+def sync() -> tuple[int, int, int, list[tuple[dt.datetime, str, str]]]:
     events = load_events()
     if not events:
         raise SystemExit("No events parsed from raw_timetable.json -- run fetch_timetable.py first.")
@@ -154,10 +162,18 @@ def sync() -> tuple[int, int, int]:
 
     current = existing_future_events(svc, cid)
     added = changed = removed = 0
+    now = dt.datetime.now(dt.timezone.utc)
+    window_end = now + dt.timedelta(days=config.NOTICE_WINDOW_DAYS)
+    notices: list[tuple[dt.datetime, str, str]] = []  # (when, +/~/-, label)
+
+    def _note(sym: str, label: str, when) -> None:
+        if isinstance(when, dt.datetime) and now <= when <= window_end:
+            notices.append((when, sym, label))
 
     for ev in events:
         body = ev.to_gcal_body()
         cur = current.pop(body["id"], None)
+        start_dt = _instant(body["start"])
         if cur is None:
             try:
                 _run(svc.events().insert(calendarId=cid, body=body))
@@ -167,34 +183,35 @@ def sync() -> tuple[int, int, int]:
                 else:
                     raise
             added += 1
+            _note("+", ev.summary, start_dt)
             time.sleep(0.25)
         elif _differs(cur, body):
             _run(svc.events().update(calendarId=cid, eventId=body["id"], body=body))
             changed += 1
+            _note("~", ev.summary, start_dt)
             time.sleep(0.25)
         # unchanged -> no API call
 
     # left in `current` = on the calendar but not in the fetched window.
     # Only remove ones still in the future -- past classes just fell out of the
     # fetch range and aren't real cancellations.
-    now = dt.datetime.now(dt.timezone.utc)
     for gid, cur in current.items():
-        try:
-            if _instant(cur["start"]) < now:
-                continue
-        except (KeyError, ValueError, TypeError):
-            pass
+        start_dt = _instant(cur.get("start", {}))
+        if isinstance(start_dt, dt.datetime) and start_dt < now:
+            continue
         try:
             _run(svc.events().delete(calendarId=cid, eventId=gid))
         except HttpError as e:
             if e.resp.status not in (404, 410):
                 raise
         removed += 1
+        _note("-", cur.get("summary") or "(unknown)", start_dt)
 
+    notices.sort(key=lambda t: t[0])
     print(f"CHANGES added={added} changed={changed} removed={removed}")
     print(f"{added + changed} written, {removed} removed, {len(events)} events "
           f"-> '{config.CALENDAR_NAME}'.")
-    return added, changed, removed
+    return added, changed, removed, notices
 
 
 _OFFLINE_HINTS = (
@@ -214,7 +231,7 @@ def _looks_offline(exc: BaseException) -> bool:
 
 def main() -> None:
     try:
-        added, changed, removed = sync()
+        added, changed, removed, notices = sync()
     except SystemExit as e:
         if e.code not in (0, None):
             notify("Auriga → Calendar: sync failed", str(e.code))
@@ -225,9 +242,18 @@ def main() -> None:
             sys.exit(0)
         notify("Auriga → Calendar: sync failed", f"{type(e).__name__}: {e}")
         raise
+
+    staleness.mark_success()
+
     if added or changed or removed:
-        notify("Timetable updated",
-               f"added {added} · changed {changed} · removed {removed}")
+        header = f"added {added} · changed {changed} · removed {removed}"
+        MAX_LINES = 6
+        lines = [f"{_fmt_when(w)} {sym} {label}" for w, sym, label in notices[:MAX_LINES]]
+        if len(notices) > MAX_LINES:
+            lines.append(f"+{len(notices) - MAX_LINES} more")
+        elif not notices:
+            lines.append(f"(nothing in the next {config.NOTICE_WINDOW_DAYS} days)")
+        notify("Timetable updated", header + "\n" + "\n".join(lines))
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ import sys
 from playwright.sync_api import sync_playwright
 
 import config
-from auth import PLANNING_PAGE, OfflineError, _is_offline, authenticated_page
+from auth import PLANNING_PAGE, OfflineError, _dump, _is_offline, authenticated_page
 from notify import notify
 
 
@@ -58,7 +58,8 @@ def do_login() -> None:
 
 def _grab_api_token(page) -> str:
     """Reload the planning view and capture the Authorization header the SPA
-    sends on its own /api/ call."""
+    sends on its own /api/ call. Retries a couple of reloads in case the app
+    is just slow to fire its own request (not an auth problem)."""
     token: dict[str, str] = {}
 
     def on_request(req):
@@ -68,13 +69,17 @@ def _grab_api_token(page) -> str:
                 token["v"] = auth
 
     page.on("request", on_request)
-    page.goto(PLANNING_PAGE, wait_until="domcontentloaded")
-    for _ in range(20):
-        page.wait_for_timeout(500)
+    for attempt in range(3):
+        page.goto(PLANNING_PAGE, wait_until="domcontentloaded")
+        for _ in range(30):
+            page.wait_for_timeout(500)
+            if token:
+                break
         if token:
             break
     page.remove_listener("request", on_request)
     if not token:
+        _dump(page, "no-api-token")
         sys.exit("Could not capture an API token from the planning page.")
     return token["v"]
 

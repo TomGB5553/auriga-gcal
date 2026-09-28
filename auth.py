@@ -71,6 +71,13 @@ def _back_on_auriga(u: str) -> bool:
     return "auriga.isae-supaero.fr" in u and "/auth/" not in u and "/login" not in u
 
 
+def _raise_if_chrome_error(page: Page) -> None:
+    """A blank chrome-error:// page mid-login means a network hiccup, not a
+    real layout/credentials problem -- don't report it as one."""
+    if page.url.startswith("chrome-error://"):
+        raise OfflineError(f"landed on {page.url} mid-login")
+
+
 def _do_keycloak_login(page: Page) -> None:
     user = keyring.get_password(SERVICE, "username")
     pw = keyring.get_password(SERVICE, "password")
@@ -89,6 +96,7 @@ def _do_keycloak_login(page: Page) -> None:
             sso.click()
             page.wait_for_url(lambda u: IDP_HOST in u, timeout=20_000)
         except PWTimeout:
+            _raise_if_chrome_error(page)
             _dump(page, "no-idp-redirect")
             sys.exit(
                 "Clicking 'SSO ISAE-SUPAERO' did not reach the ISAE login page -- "
@@ -102,6 +110,7 @@ def _do_keycloak_login(page: Page) -> None:
         page.fill(PASS_FIELD, pw)
         page.click(SUBMIT_BTN)
     except PWTimeout:
+        _raise_if_chrome_error(page)
         _dump(page, "no-login-fields")
         sys.exit(
             "Could not find the ISAE login fields -- layout changed. "
@@ -124,6 +133,7 @@ def _do_keycloak_login(page: Page) -> None:
     try:
         page.wait_for_url(_back_on_auriga, timeout=45_000)
     except PWTimeout:
+        _raise_if_chrome_error(page)
         errs = page.locator(
             ".form-error, .form-element-error, p.form-error, .alert-error, "
             "#error, .errors, #msg.errors, .kc-feedback-text"
@@ -171,17 +181,22 @@ def open_authenticated(headless: bool = True):
     for attempt in range(4):
         try:
             page.goto(PLANNING_PAGE, wait_until="domcontentloaded")
+            if page.url.startswith("chrome-error://"):
+                # goto didn't raise, but we landed on Chromium's own blank
+                # error page -- same "no real connectivity" situation, just
+                # surfaced differently.
+                raise OfflineError(f"landed on {page.url}")
             last_err = None
             break
         except Exception as e:  # noqa: BLE001 -- inspect then re-raise/translate
             last_err = e
-            if not _is_offline(e) or attempt == 3:
+            if not (_is_offline(e) or isinstance(e, OfflineError)) or attempt == 3:
                 break
             time.sleep(15)
     if last_err is not None:
         browser.close()
         pw.stop()
-        if _is_offline(last_err):
+        if isinstance(last_err, OfflineError) or _is_offline(last_err):
             raise OfflineError(str(last_err))
         raise last_err
     page.wait_for_timeout(2500)  # let Keycloak-js decide whether to redirect

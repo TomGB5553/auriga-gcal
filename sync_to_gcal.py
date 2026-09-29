@@ -152,7 +152,7 @@ def _fmt_when(instant: dt.datetime) -> str:
     return instant.astimezone(_LOCAL_TZ).strftime("%a %d %b")
 
 
-def sync() -> tuple[int, int, int, list[tuple[dt.datetime, str, str]]]:
+def sync() -> tuple[int, int, int, list[tuple[dt.datetime, str, str]], int]:
     events = load_events()
     if not events:
         raise SystemExit("No events parsed from raw_timetable.json -- run fetch_timetable.py first.")
@@ -211,7 +211,7 @@ def sync() -> tuple[int, int, int, list[tuple[dt.datetime, str, str]]]:
     print(f"CHANGES added={added} changed={changed} removed={removed}")
     print(f"{added + changed} written, {removed} removed, {len(events)} events "
           f"-> '{config.CALENDAR_NAME}'.")
-    return added, changed, removed, notices
+    return added, changed, removed, notices, len(events)
 
 
 _OFFLINE_HINTS = (
@@ -231,7 +231,7 @@ def _looks_offline(exc: BaseException) -> bool:
 
 def main() -> None:
     try:
-        added, changed, removed, notices = sync()
+        added, changed, removed, notices, total = sync()
     except SystemExit as e:
         if e.code not in (0, None):
             notify("Auriga → Calendar: sync failed", str(e.code))
@@ -251,9 +251,14 @@ def main() -> None:
         lines = [f"{_fmt_when(w)} {sym} {label}" for w, sym, label in notices[:MAX_LINES]]
         if len(notices) > MAX_LINES:
             lines.append(f"+{len(notices) - MAX_LINES} more")
-        elif not notices:
-            lines.append(f"(nothing in the next {config.NOTICE_WINDOW_DAYS} days)")
         notify("Timetable updated", header + "\n" + "\n".join(lines))
+    else:
+        # A real refresh attempt happened and it's all fine -- confirm that,
+        # rather than staying silent (silence is indistinguishable from "the
+        # job never ran"). The checkpoints that skip because things are
+        # already fresh don't reach this code at all, so this only fires on
+        # an actual attempt.
+        notify("Auriga → Calendar OK", f"Checked just now, no changes -- {total} events synced.")
 
 
 if __name__ == "__main__":

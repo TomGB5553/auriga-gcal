@@ -45,6 +45,7 @@ class Event:
     description: str
     category: str = "other"
     color_id: str | None = None
+    course: str = ""      # course name(s), "" for admin events with no course
 
     @property
     def gcal_id(self) -> str:
@@ -151,6 +152,7 @@ def _one(intervention: dict) -> Event | None:
         description="\n".join(body_lines),
         category=category,
         color_id=config.COLOR_BY_CATEGORY.get(category),
+        course=" / ".join(courses),
     )
 
 

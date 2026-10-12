@@ -14,3 +14,4 @@ launchd.log
 storage_state.bak
 login-fail-*.png
 last_success.txt
+anomalies_seen.json

@@ -27,6 +27,13 @@ REFRESH_STALE_AFTER_HOURS = 10
 # How far ahead to list individual changes in the "Timetable updated" notification.
 NOTICE_WINDOW_DAYS = 14
 
+# "Weird timetable" alert: two blocks of the SAME course, in a shared room, of
+# DIFFERENT class types (e.g. CM then PC), starting no more than this many
+# minutes after the previous one ends (overlaps count too). 15 = the school's
+# normal changeover; set 0 to only flag blocks that touch/overlap exactly.
+ODD_BLOCK_MAX_GAP_MIN = 15
+ANOMALY_SEEN_FILE = HERE / "anomalies_seen.json"  # pairs already alerted (git-ignored)
+
 # --- Google ---
 GOOGLE_CREDENTIALS = HERE / "credentials.json"  # OAuth client, downloaded from Google
 GOOGLE_TOKEN = HERE / "token.json"              # saved after first sign-in

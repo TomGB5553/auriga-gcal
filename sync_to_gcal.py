@@ -21,6 +21,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+import anomalies
 import config
 import staleness
 from events import load_events
@@ -259,6 +260,29 @@ def main() -> None:
         # already fresh don't reach this code at all, so this only fires on
         # an actual attempt.
         notify("Auriga → Calendar OK", f"Checked just now, no changes -- {total} events synced.")
+
+    check_oddities()
+
+
+def check_oddities() -> None:
+    """Flag things in the timetable that look like an Auriga mistake. Never lets
+    a bug here break the sync itself (that has already succeeded by this point)."""
+    try:
+        pairs = anomalies.find_split_blocks(load_events())
+        for a, b in pairs:
+            print("ODD:", anomalies.describe(a, b))
+        fresh = anomalies.new_since_last_alert(pairs)
+        if not fresh:
+            return
+        MAX_LINES = 4
+        lines = [anomalies.describe(a, b) for a, b in fresh[:MAX_LINES]]
+        if len(fresh) > MAX_LINES:
+            lines.append(f"+{len(fresh) - MAX_LINES} more")
+        if notify("⚠️ Weird timetable: same class split into 2 types",
+                  "\n".join(lines)):
+            anomalies.mark_alerted(fresh)
+    except Exception as e:  # noqa: BLE001
+        print(f"oddity check failed (ignored): {type(e).__name__}: {e}")
 
 
 if __name__ == "__main__":

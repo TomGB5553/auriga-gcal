@@ -6,23 +6,26 @@ import subprocess
 import sys
 
 
-def notify(title: str, message: str, *, only_headless: bool = True) -> None:
-    """Show a Notification Center banner.
+def notify(title: str, message: str, *, only_headless: bool = True) -> bool:
+    """Show a Notification Center banner. Returns True if one was actually sent.
 
     only_headless: when True (default), stay silent if we're attached to a
     terminal -- you don't need a banner for a command you ran yourself.
     """
     if only_headless and sys.stdin.isatty():
-        return
+        return False
     if not shutil.which("osascript"):
-        return
+        return False
+
     def clean(s: str, maxlen: int) -> str:
         return s.replace("\\", "").replace('"', "'").strip()[:maxlen]
+
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["osascript", "-e",
              f'display notification "{clean(message, 500)}" with title "{clean(title, 80)}"'],
             check=False, timeout=10,
         )
+        return result.returncode == 0
     except Exception:
-        pass
+        return False
